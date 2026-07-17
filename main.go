@@ -110,7 +110,7 @@ func carregarDados(caminho string) (*DataStore, error) {
 
 func main() {
 	// Apenas para testar se o parser funciona antes de montar o TUI
-	store, err := carregarDados("TabelaNutricional.tsv")
+	store, err := carregarDados("database.tsv")
 	if err != nil {
 		log.Fatalf("Erro ao carregar dados: %v", err)
 	}
