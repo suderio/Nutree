@@ -68,7 +68,7 @@ class NutreeApp(App):
 
     def load_data(self) -> None:
         try:
-            df_raw = pd.read_csv("TabelaNutricional.tsv", sep="\t")
+            df_raw = pd.read_csv("database.tsv", sep="\t")
 
             self.unidades = df_raw.iloc[0]
             self.recomendado = df_raw.iloc[1]
@@ -88,7 +88,7 @@ class NutreeApp(App):
                 ).fillna(0)
 
         except Exception as e:
-            self.exit(f"Erro ao carregar TabelaNutricional.tsv: {e}")
+            self.exit(f"Erro ao carregar database.tsv: {e}")
 
     def configurar_interface(self) -> None:
         # Preenche o Select com a lista de nutrientes (ignorando o 'Nome')
