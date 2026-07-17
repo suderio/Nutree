@@ -12,33 +12,24 @@ from textual.widgets import (
     Select,
     TextArea,
 )
-
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 
 
 class NutreeApp(App):
     TITLE = "Nutree - Análise Nutricional"
 
     CSS = """
-    #top-config {
+    #top-config, #add-alimento-container {
         layout: horizontal;
         height: auto;
         margin-bottom: 1;
     }
-    #nutriente_select {
+    #nutriente_select, #alimento_select {
         width: 3fr;
         margin-right: 1;
     }
-    #top_n_input {
+    #top_n_input, #btn_add_alimento {
         width: 1fr;
-    }
-    #calc_input {
-        height: 10;
-        margin-bottom: 1;
-        border: solid green;
-    }
-    #btn_calcular {
-        margin-bottom: 1;
     }
     .metrics-box {
         height: auto;
@@ -52,18 +43,25 @@ class NutreeApp(App):
     #lbl_maximo {
         color: $error;
     }
+    #calc_input {
+        height: 10;
+        margin-bottom: 1;
+        border: solid green;
+    }
+    #btn_calcular {
+        margin-bottom: 1;
+    }
     """
 
     def __init__(self):
         super().__init__()
         self.df_foods = None
         self.unidades = None
+        self.recomendado = None
+        self.maximo = None
 
     def on_mount(self) -> None:
-        # Paga o "pedágio" do Pandas apenas uma vez aqui
         self.load_data()
-
-        # Configura as tabelas e opções
         self.configurar_interface()
 
     def load_data(self) -> None:
@@ -76,7 +74,6 @@ class NutreeApp(App):
 
             self.df_foods = df_raw.iloc[3:].copy()
 
-            # Garante que as novas colunas de metadados não sejam forçadas a números
             colunas_ignorar = ["Nome", "Categoria", "Porção Média"]
             cols_numericas = [
                 c for c in self.df_foods.columns if c not in colunas_ignorar
@@ -91,10 +88,21 @@ class NutreeApp(App):
             self.exit(f"Erro ao carregar database.tsv: {e}")
 
     def configurar_interface(self) -> None:
-        # Preenche o Select com a lista de nutrientes (ignorando o 'Nome')
-        select = self.query_one("#nutriente_select", Select)
-        colunas = list(self.df_foods.columns.drop("Nome"))
-        select.set_options([(col, col) for col in colunas])
+        # Preenche o Select da aba de Nutrientes
+        select_nutriente = self.query_one("#nutriente_select", Select)
+        colunas = list(
+            self.df_foods.columns.drop(
+                ["Nome", "Categoria", "Porção Média"], errors="ignore"
+            )
+        )
+        select_nutriente.set_options([(col, col) for col in colunas])
+
+        # Preenche o Select da aba da Calculadora com os nomes dos alimentos
+        select_alimento = self.query_one("#alimento_select", Select)
+        alimentos = list(self.df_foods["Nome"].dropna().unique())
+        # Ordena alfabeticamente para facilitar a busca
+        alimentos.sort()
+        select_alimento.set_options([(alimento, alimento) for alimento in alimentos])
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -108,19 +116,30 @@ class NutreeApp(App):
                     yield Input(
                         value="5", placeholder="Top N", id="top_n_input", type="integer"
                     )
-                    with Horizontal(id="top-metrics", classes="metrics-box"):
-                        yield Label("", id="lbl_recomendado")
-                        yield Label("", id="lbl_maximo")
+
+                with Horizontal(id="top-metrics", classes="metrics-box"):
+                    yield Label("", id="lbl_recomendado")
+                    yield Label("", id="lbl_maximo")
+
                 yield DataTable(id="top_table", cursor_type="row")
 
             # ABA 2: Calculadora de Refeição
             with TabPane("Calculadora de Refeição", id="tab-calc"):
+                yield Label("Selecione um alimento para adicionar à lista:")
+
+                # --- NOVO BLOCO: Select e Botão Adicionar ---
+                with Horizontal(id="add-alimento-container"):
+                    yield Select([], prompt="Buscar alimento...", id="alimento_select")
+                    yield Button(
+                        "Adicionar (100g)", id="btn_add_alimento", variant="primary"
+                    )
+                # --------------------------------------------
+
                 yield Label(
-                    "Insira os alimentos (Formato -> Nome: Gramas). Um por linha:"
+                    "Lista de alimentos e quantidades (Formato -> Nome: Gramas):"
                 )
-                yield TextArea(
-                    "Ovos: 150\nPeito de Frango: 200\nAzeite: 15", id="calc_input"
-                )
+                # Caixa de texto limpa para começar
+                yield TextArea(id="calc_input")
                 yield Button("Calcular Totais", id="btn_calcular", variant="success")
                 yield DataTable(id="calc_table", cursor_type="row")
         yield Footer()
@@ -158,11 +177,9 @@ class NutreeApp(App):
 
         unidade = self.unidades[nutriente]
 
-        # --- ATUALIZA AS MÉTRICAS DE SEGURANÇA ---
         val_rec = self.recomendado[nutriente]
         val_max = self.maximo[nutriente]
 
-        # Limpa eventuais "NaN" do Pandas caso a célula original estivesse vazia
         str_rec = (
             f"{val_rec}" if pd.notna(val_rec) and str(val_rec).strip() != "" else "N/A"
         )
@@ -172,7 +189,6 @@ class NutreeApp(App):
 
         lbl_rec.update(f"🎯 Alvo Diário: [b]{str_rec} {unidade}[/b]")
         lbl_max.update(f"⚠️ Teto (UL): [b]{str_max} {unidade}[/b]")
-        # -----------------------------------------
 
         table.add_columns("Pos", "Alimento", f"Qtd ({unidade})")
 
@@ -189,6 +205,29 @@ class NutreeApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_calcular":
             self.atualizar_calc_table()
+        # Captura o clique do novo botão
+        elif event.button.id == "btn_add_alimento":
+            self.adicionar_ao_texto()
+
+    def adicionar_ao_texto(self) -> None:
+        select = self.query_one("#alimento_select", Select)
+        text_area = self.query_one("#calc_input", TextArea)
+
+        alimento = select.value
+
+        # Garante que algo válido foi selecionado
+        if isinstance(alimento, str) and alimento != Select.BLANK:
+            texto_atual = text_area.text
+            nova_linha = f"{alimento}: 100"
+
+            # Adiciona a nova linha verificando se já há quebra de linha no final
+            if texto_atual and not texto_atual.endswith("\n"):
+                text_area.text = f"{texto_atual}\n{nova_linha}\n"
+            else:
+                text_area.text = f"{texto_atual}{nova_linha}\n"
+
+            # Retorna o foco para o Select para permitir adicionar vários rapidamente
+            select.focus()
 
     def atualizar_calc_table(self) -> None:
         text_area = self.query_one("#calc_input", TextArea)
@@ -215,7 +254,6 @@ class NutreeApp(App):
         for alimento, qtd in dieta.items():
             linha_df = self.df_foods[self.df_foods["Nome"] == alimento]
             if not linha_df.empty:
-                # Isola apenas as colunas de nutrientes para o cálculo matemático
                 cols_calc = [c for c in linha_df.columns if c not in colunas_ignorar]
                 valores_100g = linha_df[cols_calc].iloc[0]
 
@@ -233,7 +271,6 @@ class NutreeApp(App):
             table.add_row("Nenhum alimento válido foi processado.")
             return
 
-        # Adiciona as colunas de contexto solicitadas
         table.add_columns(
             "Nutriente", "Total Ingerido", "Alvo Diário", "Máximo (UL)", "Unidade"
         )
@@ -242,11 +279,9 @@ class NutreeApp(App):
         for nutriente, valor in totais_limpos.items():
             unid = str(self.unidades.get(nutriente, ""))
 
-            # Busca os limites no cabeçalho
             val_rec = self.recomendado.get(nutriente, "")
             val_max = self.maximo.get(nutriente, "")
 
-            # Formata para evitar exibição de "nan" (not a number) na interface
             str_rec = (
                 str(val_rec)
                 if pd.notna(val_rec) and str(val_rec).strip() != ""
